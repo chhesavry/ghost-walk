@@ -37,6 +37,9 @@ local Config = {
     PickupLimit  = 0,
     PickupCount  = 0,
     PickupWaitAfterLimit = 1.0,
+    PickupESP        = false,
+    PickupESPColor   = Color3.fromRGB(90, 200, 255),
+    PickupESPSelected = false,
 }
 
 local LiveFPS, LivePing = 0, 0
@@ -415,6 +418,11 @@ LocalPlayer.CharacterAdded:Connect(function(char)
         task.wait(0.25)
         enableGodMode()
     end
+    if Config.PickupESP then
+        task.defer(function()
+            if _G.GhostRefreshESP then _G.GhostRefreshESP() end
+        end)
+    end
 end)
 
 local function stopPlayerLock()
@@ -689,7 +697,7 @@ createInstance("TextLabel", {
     Size = UDim2.new(1, -120, 0, 14),
     Position = UDim2.new(0, 54, 0, 28),
     BackgroundTransparency = 1,
-    Text = "v9.4  ·  fps · travel · freecam · script",
+    Text = "v9.5  ·  fps · travel · freecam · esp · script",
     TextColor3 = Theme.TextMute,
     Font = Theme.Font,
     TextSize = 10,
@@ -1755,7 +1763,7 @@ local function doWalk(targetCF, label)
                 else
                     local step = math.min(speed * dt, needDown)
                     local newPos = Vector3.new(targetPos.X, myPos.Y - step, targetPos.Z)
-                    Root.CFrame = CFrame.new(newPos, Vector3.new(targetPos.X, newPos.Y, targetPos.Z + 1))
+                    Root.CFrame = CFrame.new(newPos, Vector3.new(targetPos.X, newPos.Y, newPos.Z + 1))
                     Root.AssemblyLinearVelocity = Vector3.new(0, -speed, 0)
                     Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
                     return
@@ -2390,6 +2398,9 @@ end
 
 addLocationBtn.MouseButton1Click:Connect(openAddLocation)
 
+-- ============================================================
+-- PICKUP SYSTEM
+-- ============================================================
 local PickupConn      = nil
 local PickupCount     = 0
 local PickupModeAll   = true
@@ -2747,6 +2758,187 @@ local function stopAutoPickup()
     stopWalk()
 end
 
+-- ============================================================
+-- PICKUP ESP
+-- ============================================================
+local ESPFolder = nil
+local ESPItems  = {}   -- [object] = { billboard = ..., label = ..., conn = ... }
+local ESPLoopRunning = false
+
+local function shouldESP(name)
+    if not Config.PickupESP then return false end
+    if Config.PickupESPSelected and not SelectedItems[name] then
+        return false
+    end
+    return itemAllowed(name)
+end
+
+local function resolveAdornee(object)
+    if object:IsA("BasePart") then
+        return object
+    elseif object:IsA("Model") then
+        return object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+    elseif object:IsA("Tool") then
+        return object:FindFirstChild("Handle")
+    elseif object:IsA("ProximityPrompt") then
+        local parent = object.Parent
+        if parent and parent:IsA("BasePart") then
+            return parent
+        elseif parent and parent:IsA("Model") then
+            return parent.PrimaryPart or parent:FindFirstChildWhichIsA("BasePart", true)
+        elseif parent and parent:IsA("Attachment") then
+            return parent.Parent
+        end
+    end
+    return nil
+end
+
+local function attachESP(object, name)
+    if ESPItems[object] then
+        local data = ESPItems[object]
+        if data.label and data.label.Text ~= name then
+            data.label.Text = name
+        end
+        return
+    end
+
+    local adornee = resolveAdornee(object)
+    if not adornee then return end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "GhostESP"
+    billboard.Adornee = adornee
+    billboard.Size = UDim2.new(0, 160, 0, 30)
+    billboard.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.LightInfluence = 0
+    billboard.MaxDistance = 500
+    billboard.Parent = ESPFolder or Workspace
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = name
+    label.TextColor3 = Config.PickupESPColor
+    label.TextStrokeTransparency = 0.3
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    label.Parent = billboard
+
+    local cleanupConn
+    cleanupConn = object.AncestryChanged:Connect(function()
+        if not object:IsDescendantOf(game) then
+            if billboard.Parent then billboard:Destroy() end
+            if cleanupConn then cleanupConn:Disconnect() end
+            ESPItems[object] = nil
+        end
+    end)
+
+    ESPItems[object] = {
+        billboard = billboard,
+        label     = label,
+        conn      = cleanupConn,
+    }
+end
+
+local function scanESP()
+    if not Config.PickupESP then return end
+
+    for _, object in ipairs(Workspace:GetDescendants()) do
+        if object:IsA("ProximityPrompt") and object.Enabled then
+            local name = object.ObjectText ~= "" and object.ObjectText
+                or (object.ActionText ~= "" and object.ActionText)
+                or (object.Parent and object.Parent.Name)
+                or "Prompt"
+            if shouldESP(name) then
+                attachESP(object, name)
+            end
+        elseif object:IsA("Tool") and object.Parent == Workspace then
+            if shouldESP(object.Name) then
+                attachESP(object, object.Name)
+            end
+        end
+    end
+
+    for _, object in ipairs(Workspace:GetChildren()) do
+        if object:IsA("BasePart") or object:IsA("Model") then
+            local lowerName = string.lower(object.Name)
+            if string.find(lowerName, "coin")
+            or string.find(lowerName, "gem")
+            or string.find(lowerName, "cash")
+            or string.find(lowerName, "pickup")
+            or string.find(lowerName, "item")
+            or string.find(lowerName, "orb")
+            or string.find(lowerName, "token")
+            or string.find(lowerName, "loot")
+            or string.find(lowerName, "drop")
+            or string.find(lowerName, "chest")
+            or string.find(lowerName, "bag")
+            or string.find(lowerName, "crate") then
+                if shouldESP(object.Name) then
+                    attachESP(object, object.Name)
+                end
+            end
+        end
+    end
+end
+
+local function clearESP()
+    for object, data in pairs(ESPItems) do
+        if data.billboard and data.billboard.Parent then
+            data.billboard:Destroy()
+        end
+        if data.conn then
+            pcall(function() data.conn:Disconnect() end)
+        end
+    end
+    ESPItems = {}
+
+    if ESPFolder then
+        ESPFolder:Destroy()
+        ESPFolder = nil
+    end
+end
+
+local function startPickupESP()
+    clearESP()
+
+    ESPFolder = Instance.new("Folder")
+    ESPFolder.Name = "GhostESPItems"
+    ESPFolder.Parent = Workspace
+
+    scanESP()
+
+    if not ESPLoopRunning then
+        ESPLoopRunning = true
+        task.spawn(function()
+            while true do
+                if Config.PickupESP then
+                    scanESP()
+                    task.wait(0.5)
+                else
+                    ESPLoopRunning = false
+                    break
+                end
+            end
+        end)
+    end
+end
+
+local function stopPickupESP()
+    Config.PickupESP = false
+    clearESP()
+end
+
+local function refreshESP()
+    if Config.PickupESP then
+        startPickupESP()
+    end
+end
+
+_G.GhostRefreshESP = refreshESP
+
 createSection(PagePickup, "Auto Pickup", 1)
 
 createToggleRow(PagePickup, {
@@ -2768,10 +2960,39 @@ createToggleRow(PagePickup, {
     end,
 })
 
+createToggleRow(PagePickup, {
+    name = "Pickup ESP",
+    desc = "Show item names floating in the world",
+    order = 3,
+    callback = function(state)
+        Config.PickupESP = state
+        if state then
+            startPickupESP()
+            if toastFn then toastFn("Pickup ESP ON", Theme.Success) end
+        else
+            stopPickupESP()
+            if toastFn then toastFn("Pickup ESP OFF", Theme.TextDim) end
+        end
+    end,
+})
+
+createToggleRow(PagePickup, {
+    name = "ESP: Selected only",
+    desc = "Only show names for items you checked below",
+    order = 4,
+    callback = function(state)
+        Config.PickupESPSelected = state
+        refreshESP()
+        if toastFn then
+            toastFn(state and "ESP: selected only" or "ESP: all items", Theme.Accent)
+        end
+    end,
+})
+
 createNumberRow(PagePickup, {
     name = "Pickup Range",
     desc = "Studs around player (radius)",
-    order = 3,
+    order = 5,
     value = tostring(Config.PickupRange),
     callback = function(value)
         Config.PickupRange = value
@@ -2782,7 +3003,7 @@ createNumberRow(PagePickup, {
 createNumberRow(PagePickup, {
     name = "Scan Delay",
     desc = "Seconds between each scan",
-    order = 4,
+    order = 6,
     value = tostring(Config.PickupDelay),
     callback = function(value)
         Config.PickupDelay = math.max(0.05, value)
@@ -2792,7 +3013,7 @@ createNumberRow(PagePickup, {
 createNumberRow(PagePickup, {
     name = "Pickup Limit",
     desc = "Items per cycle (0 = unlimited)",
-    order = 5,
+    order = 7,
     value = tostring(Config.PickupLimit),
     callback = function(value)
         Config.PickupLimit = math.max(0, math.floor(value))
@@ -2812,7 +3033,7 @@ local pickupModeCard = createInstance("Frame", {
     Size = UDim2.new(1, 0, 0, 70),
     BackgroundColor3 = Theme.Card,
     BorderSizePixel = 0,
-    LayoutOrder = 6,
+    LayoutOrder = 8,
     Parent = PagePickup,
 })
 addCorner(pickupModeCard, 12)
@@ -2880,18 +3101,20 @@ local function setPickupMode(allMode)
     if toastFn then
         toastFn(allMode and "Pickup: ALL items" or "Pickup: SELECTED only", Theme.Accent)
     end
+
+    refreshESP()
 end
 
 allItemsPill.MouseButton1Click:Connect(function() setPickupMode(true) end)
 selectedPill.MouseButton1Click:Connect(function() setPickupMode(false) end)
 
-createSection(PagePickup, "Server items", 7)
+createSection(PagePickup, "Server items", 9)
 
 local filterCard = createInstance("Frame", {
     Size = UDim2.new(1, 0, 0, 44),
     BackgroundColor3 = Theme.Card,
     BorderSizePixel = 0,
-    LayoutOrder = 8,
+    LayoutOrder = 10,
     Parent = PagePickup,
 })
 addCorner(filterCard, 12)
@@ -2935,7 +3158,7 @@ end)
 local selectRow = createInstance("Frame", {
     Size = UDim2.new(1, 0, 0, 36),
     BackgroundTransparency = 1,
-    LayoutOrder = 9,
+    LayoutOrder = 11,
     Parent = PagePickup,
 })
 
@@ -2971,7 +3194,7 @@ local itemListHolder = createInstance("Frame", {
     Size = UDim2.new(1, 0, 0, 0),
     BackgroundTransparency = 1,
     AutomaticSize = Enum.AutomaticSize.Y,
-    LayoutOrder = 10,
+    LayoutOrder = 12,
     Parent = PagePickup,
 })
 addVerticalList(itemListHolder, 6)
@@ -3044,6 +3267,7 @@ refreshPickupList = function()
                     setPickupMode(false)
                 end
                 refreshPickupList()
+                refreshESP()
             end)
 
             table.insert(PickupListRows, row)
@@ -3054,6 +3278,7 @@ end
 scanBtn.MouseButton1Click:Connect(function()
     local count = scanServerItems()
     refreshPickupList()
+    refreshESP()
     if toastFn then
         toastFn("Scanned " .. tostring(count) .. " item types", Theme.Success)
     end
@@ -3065,12 +3290,14 @@ selectAllBtn.MouseButton1Click:Connect(function()
     end
     setPickupMode(false)
     refreshPickupList()
+    refreshESP()
     if toastFn then toastFn("Selected all scanned items", Theme.Accent) end
 end)
 
 clearSelectBtn.MouseButton1Click:Connect(function()
     SelectedItems = {}
     refreshPickupList()
+    refreshESP()
     if toastFn then toastFn("Selection cleared", Theme.TextDim) end
 end)
 
@@ -3078,7 +3305,7 @@ local pickupStatusCard = createInstance("Frame", {
     Size = UDim2.new(1, 0, 0, 56),
     BackgroundColor3 = Theme.Card,
     BorderSizePixel = 0,
-    LayoutOrder = 11,
+    LayoutOrder = 13,
     Parent = PagePickup,
 })
 addCorner(pickupStatusCard, 12)
@@ -3934,4 +4161,4 @@ toastFn = function(message, color)
     end)
 end
 
-toastFn("Ghost Walk v9.4 · ready", Theme.Success)
+toastFn("Ghost Walk v9.5 · ready", Theme.Success)
