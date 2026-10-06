@@ -1,15 +1,3 @@
---[[
-    ╔══════════════════════════════════════════════════════════════╗
-    ║                       GHOST WALK v9.6                        ║
-    ║   Movement · Travel · Pickup · Players · Script Executor     ║
-    ╚══════════════════════════════════════════════════════════════╝
-]]
-
-return (function()
-
---==============================================================
--- SERVICES
---==============================================================
 local Players                = game:GetService("Players")
 local RunService             = game:GetService("RunService")
 local UserInputService       = game:GetService("UserInputService")
@@ -22,20 +10,13 @@ local VirtualInputManager    = game:GetService("VirtualInputManager")
 local Stats                  = game:GetService("Stats")
 local Lighting               = game:GetService("Lighting")
 
---==============================================================
--- CONSTANTS
---==============================================================
 local LocalPlayer     = Players.LocalPlayer
 local DEFAULT_GRAVITY = 196.2
 local SESSION_START   = tick()
 local UI_WIDTH        = 400
-local UI_HEIGHT       = 540
+local UI_HEIGHT       = 520
 local UI_BORDER       = 1
-local SCRIPT_LOG_MAX  = 200
 
---==============================================================
--- CONFIGURATION
---==============================================================
 local Config = {
     Speed        = 100,
     DefaultSpeed = 16,
@@ -45,38 +26,31 @@ local Config = {
     GodMode      = false,
     FlyActive    = false,
     FlyHeight    = 25,
-    TravelMode   = "teleport",
-    ReturnDelay  = 1.0,
-    FpsBoost     = false,
-    FreeCam         = false,
-    FreeCamSpeed    = 60,
-    FreeCamAction   = false,
-    FreeCamRange    = 15,
+    TravelMode = "teleport",
+    ReturnDelay = 1.0,
+    FpsBoost = false,
+    FreeCam      = false,
+    FreeCamSpeed = 60,
     AutoPickup   = false,
     PickupRange  = 20,
     PickupDelay  = 0.25,
-    PickupTotal  = 0,
-    PickupDone   = 0,
+    PickupLimit  = 0,
+    PickupCount  = 0,
+    PickupWaitAfterLimit = 1.0,
 }
 
---==============================================================
--- STATE
---==============================================================
 local LiveFPS, LivePing = 0, 0
 local fpsFrames, fpsLast = 0, tick()
 
 local Character, Humanoid, Root
 local NoclipConn, HeightConn, InvisConn, GodConn
-local SavedPoints     = {}
-local Teleporting     = false
-local WalkConn        = nil
-local StealLoopActive = false
+local SavedPoints      = {}
+local Teleporting      = false
+local WalkConn         = nil
+local StealLoopActive  = false
 local LockTarget, LockConn, LockMode, CurrentMode = nil, nil, "follow", "follow"
 local toastFn
 
---==============================================================
--- SMALL HELPERS
---==============================================================
 local function createInstance(class, props)
     local instance = Instance.new(class)
     for key, value in pairs(props or {}) do
@@ -120,9 +94,6 @@ local function addHorizontalList(parent, gap)
     return layout
 end
 
---==============================================================
--- CHARACTER MANAGEMENT
---==============================================================
 local function bindCharacter(char)
     Character = char
     Humanoid  = char:WaitForChild("Humanoid")
@@ -134,9 +105,6 @@ if LocalPlayer.Character then
     bindCharacter(LocalPlayer.Character)
 end
 
---==============================================================
--- GHOST WALK
---==============================================================
 local function enableGhostWalk()
     local lockedY = Root.Position.Y
     Workspace.Gravity = 0
@@ -172,9 +140,6 @@ local function disableGhostWalk()
     end
 end
 
---==============================================================
--- INVISIBILITY
---==============================================================
 local function enableInvisibility()
     for _, part in ipairs(Character:GetDescendants()) do
         if part:IsA("BasePart") or part:IsA("Decal") then
@@ -215,9 +180,6 @@ local function disableInvisibility()
     end
 end
 
---==============================================================
--- FPS / PING TRACKER
---==============================================================
 RunService.RenderStepped:Connect(function()
     fpsFrames = fpsFrames + 1
     local now = tick()
@@ -249,9 +211,6 @@ local function formatSession()
     return string.format("%dm %02ds", minutes, seconds)
 end
 
---==============================================================
--- FPS BOOST
---==============================================================
 local FpsBoostSaved = nil
 
 local function enableFpsBoost()
@@ -267,11 +226,13 @@ local function enableFpsBoost()
         settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
         settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level01
     end)
+
     pcall(function()
         Lighting.GlobalShadows = false
         Lighting.FogEnd        = 9e9
         Lighting.Brightness    = 1
     end)
+
     pcall(function()
         for _, effect in ipairs(Lighting:GetChildren()) do
             if effect:IsA("BlurEffect")
@@ -283,8 +244,13 @@ local function enableFpsBoost()
             end
         end
     end)
-    pcall(function() if setfpscap then setfpscap(999) end end)
-    pcall(function() if typeof(setfps) == "function" then setfps(999) end end)
+
+    pcall(function()
+        if setfpscap then setfpscap(999) end
+    end)
+    pcall(function()
+        if typeof(setfps) == "function" then setfps(999) end
+    end)
 end
 
 local function disableFpsBoost()
@@ -294,19 +260,20 @@ local function disableFpsBoost()
         settings().Rendering.QualityLevel = FpsBoostSaved.quality
         settings().Rendering.MeshPartDetailLevel = FpsBoostSaved.mesh
     end)
+
     pcall(function()
         Lighting.GlobalShadows = FpsBoostSaved.globalShadows
         Lighting.FogEnd        = FpsBoostSaved.fogEnd
         Lighting.Brightness    = FpsBoostSaved.brightness
     end)
-    pcall(function() if setfpscap then setfpscap(60) end end)
+
+    pcall(function()
+        if setfpscap then setfpscap(60) end
+    end)
 
     FpsBoostSaved = nil
 end
 
---==============================================================
--- GOD MODE
---==============================================================
 local GodLoopStarted = false
 local GodAntiTPConn  = nil
 local GodLastCF      = nil
@@ -422,9 +389,6 @@ local function disableGodMode()
     end
 end
 
---==============================================================
--- CHARACTER RESPAWN HANDLER
---==============================================================
 LocalPlayer.CharacterAdded:Connect(function(char)
     if WalkConn then WalkConn:Disconnect() WalkConn = nil end
     if GodConn then GodConn:Disconnect() GodConn = nil end
@@ -453,9 +417,6 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     end
 end)
 
---==============================================================
--- PLAYER LOCK
---==============================================================
 local function stopPlayerLock()
     if LockConn then LockConn:Disconnect() LockConn = nil end
     LockTarget = nil
@@ -520,9 +481,6 @@ local function startPlayerLock(targetPlayer, mode)
     end)
 end
 
---==============================================================
--- THEME
---==============================================================
 local Theme = {
     Background = Color3.fromRGB(14, 14, 18),
     Header     = Color3.fromRGB(18, 18, 24),
@@ -546,9 +504,6 @@ local Theme = {
     FontBold   = Enum.Font.GothamBold,
 }
 
---==============================================================
--- ICON HELPERS
---==============================================================
 local function iconBar(parent, width, height, color)
     local frame = createInstance("Frame", {
         Size = UDim2.new(0, width, 0, height),
@@ -630,9 +585,6 @@ local function setIconColor(holder, color)
     end
 end
 
---==============================================================
--- UI ROOT
---==============================================================
 if CoreGui:FindFirstChild("GhostWalkUI") then
     CoreGui.GhostWalkUI:Destroy()
 end
@@ -661,9 +613,6 @@ local FloatBtn = createInstance("TextButton", {
 })
 addCorner(FloatBtn, 23)
 
---==============================================================
--- UI WINDOW
---==============================================================
 local Shell = createInstance("Frame", {
     Name = "Shell",
     Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT),
@@ -687,9 +636,6 @@ local Window = createInstance("Frame", {
 })
 addCorner(Window, 13)
 
---==============================================================
--- UI HEADER
---==============================================================
 local Header = createInstance("Frame", {
     Name = "Header",
     Size = UDim2.new(1, 0, 0, 52),
@@ -743,7 +689,7 @@ createInstance("TextLabel", {
     Size = UDim2.new(1, -120, 0, 14),
     Position = UDim2.new(0, 54, 0, 28),
     BackgroundTransparency = 1,
-    Text = "v9.6  ·  travel · pickup · freecam · script",
+    Text = "v9.4  ·  fps · travel · freecam · script",
     TextColor3 = Theme.TextMute,
     Font = Theme.Font,
     TextSize = 10,
@@ -800,9 +746,6 @@ CloseBtn.MouseLeave:Connect(function()
     setIconColor(closeIcon, Theme.TextDim)
 end)
 
---==============================================================
--- UI TABS
---==============================================================
 local TabBar = createInstance("Frame", {
     Size = UDim2.new(1, -24, 0, 34),
     Position = UDim2.new(0, 12, 0, 58),
@@ -890,9 +833,6 @@ TabPlayers.MouseButton1Click:Connect(function() switchTab("players") end)
 TabScript.MouseButton1Click:Connect(function() switchTab("script") end)
 switchTab("main")
 
---==============================================================
--- UI COMPONENT BUILDERS
---==============================================================
 local function createSection(parent, text, order)
     local frame = createInstance("Frame", {
         Size = UDim2.new(1, 0, 0, 18),
@@ -1092,57 +1032,6 @@ local function createNumberRow(parent, options)
     end)
 end
 
---==============================================================
--- SHARED PROMPT / ITEM HELPERS
---==============================================================
-local function firePrompt(prompt)
-    if not prompt or not prompt:IsA("ProximityPrompt") then return false end
-    if not prompt.Enabled then return false end
-
-    local success = false
-    pcall(function()
-        if fireproximityprompt then
-            fireproximityprompt(prompt)
-            success = true
-        end
-    end)
-
-    if not success then
-        pcall(function()
-            prompt.HoldDuration = 0
-            prompt:InputHoldBegin()
-            task.wait(0.05)
-            prompt:InputHoldEnd()
-            success = true
-        end)
-    end
-
-    return success
-end
-
-local function getItemPosition(object)
-    if object:IsA("BasePart") then return object.Position end
-
-    if object:IsA("Model") then
-        local ok, pivot = pcall(function() return object:GetPivot().Position end)
-        if ok then return pivot end
-    end
-
-    if object:IsA("ProximityPrompt") and object.Parent then
-        return getItemPosition(object.Parent)
-    end
-
-    if object:IsA("Tool") then
-        local handle = object:FindFirstChild("Handle")
-        if handle then return handle.Position end
-    end
-
-    return nil
-end
-
---==============================================================
--- PAGE: MAIN
---==============================================================
 createSection(PageMain, "Account", 1)
 
 local userCard = createInstance("Frame", {
@@ -1347,14 +1236,10 @@ createToggleRow(PageMain, {
     },
 })
 
---==============================================================
--- FREE CAM
---==============================================================
-local FreeCamConn        = nil
-local FreeCamInputConns  = {}
-local FreeCamSaved       = nil
-local FreeCamGui         = nil
-local FreeCamActionConn  = nil
+local FreeCamConn = nil
+local FreeCamInputConns = {}
+local FreeCamSaved = nil
+local FreeCamGui = nil
 local FreeCamTouch = {
     moveDir     = Vector3.zero,
     upHeld      = false,
@@ -1372,43 +1257,6 @@ local function destroyFreeCamGui()
     end
 end
 
-local function collectNearCamera(camPos)
-    if not Config.FreeCamAction then return 0 end
-
-    local range = tonumber(Config.FreeCamRange) or 15
-    local found = 0
-
-    for _, object in ipairs(Workspace:GetDescendants()) do
-        if object:IsA("ProximityPrompt") and object.Enabled then
-            local position = getItemPosition(object)
-            if position and (position - camPos).Magnitude <= range then
-                if firePrompt(object) then
-                    found = found + 1
-                end
-            end
-        end
-    end
-
-    return found
-end
-
-local function startFreeCamAction()
-    if FreeCamActionConn then FreeCamActionConn:Disconnect() end
-    FreeCamActionConn = RunService.Heartbeat:Connect(function()
-        if not Config.FreeCam or not Config.FreeCamAction then return end
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-        pcall(function() collectNearCamera(cam.CFrame.Position) end)
-    end)
-end
-
-local function stopFreeCamAction()
-    if FreeCamActionConn then
-        FreeCamActionConn:Disconnect()
-        FreeCamActionConn = nil
-    end
-end
-
 local function stopFreeCam()
     if FreeCamConn then
         FreeCamConn:Disconnect()
@@ -1421,8 +1269,6 @@ local function stopFreeCam()
     FreeCamInputConns = {}
 
     destroyFreeCamGui()
-    stopFreeCamAction()
-
     Config.FreeCam = false
 
     FreeCamTouch.moveDir = Vector3.zero
@@ -1468,8 +1314,8 @@ local function buildFreeCamGui()
     })
 
     local exitBtn = createInstance("TextButton", {
-        Size = UDim2.new(0, 130, 0, 36),
-        Position = UDim2.new(0.5, -65, 0, 20),
+        Size = UDim2.new(0, 120, 0, 36),
+        Position = UDim2.new(0.5, -60, 0, 20),
         BackgroundColor3 = Theme.Danger,
         BorderSizePixel = 0,
         Text = "Exit Free Cam",
@@ -1655,8 +1501,8 @@ local function buildFreeCamGui()
     end))
 
     createInstance("TextLabel", {
-        Size = UDim2.new(0, 240, 0, 36),
-        Position = UDim2.new(0.5, -120, 0, 62),
+        Size = UDim2.new(0, 220, 0, 36),
+        Position = UDim2.new(0.5, -110, 0, 62),
         BackgroundTransparency = 1,
         Text = "Drag right side to look\nJoystick = move · ▲▼ = up/down",
         TextColor3 = Theme.TextMute,
@@ -1784,7 +1630,7 @@ local function toggleFreeCam(state)
         if toastFn then
             local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
             if isMobile then
-                toastFn("Free Cam ON · joystick + drag to look · Exit on top", Theme.Success)
+                toastFn("Free Cam ON · joystick + drag to look · Exit button on top", Theme.Success)
             else
                 toastFn("Free Cam ON · WASD + RMB look · or use on-screen pads", Theme.Success)
             end
@@ -1801,9 +1647,6 @@ LocalPlayer.CharacterAdded:Connect(function()
     end
 end)
 
---==============================================================
--- TRAVEL CORE
---==============================================================
 local function stopWalk()
     if WalkConn then
         WalkConn:Disconnect()
@@ -2009,9 +1852,6 @@ ProximityPromptService.PromptTriggered:Connect(function(_, player)
     end
 end)
 
---==============================================================
--- PAGE: TRAVEL
---==============================================================
 createSection(PageTravel, "Mode", 1)
 
 local travelModeCard = createInstance("Frame", {
@@ -2120,36 +1960,11 @@ createToggleRow(PageTravel, {
     },
 })
 
-createToggleRow(PageTravel, {
-    name = "Free Cam Action",
-    desc = "Auto-fire prompts near the free cam",
-    order = 6,
-    callback = function(state)
-        Config.FreeCamAction = state
-        if state then
-            startFreeCamAction()
-            if toastFn then toastFn("Free Cam Action ON", Theme.Success) end
-        else
-            stopFreeCamAction()
-            if toastFn then toastFn("Free Cam Action OFF", Theme.TextDim) end
-        end
-    end,
-    input = {
-        value = tostring(Config.FreeCamRange),
-        callback = function(value)
-            Config.FreeCamRange = math.max(3, value)
-            if toastFn then
-                toastFn("Free Cam range: " .. tostring(Config.FreeCamRange), Theme.Accent)
-            end
-        end,
-    },
-})
-
 local freeCamTip = createInstance("Frame", {
-    Size = UDim2.new(1, 0, 0, 56),
+    Size = UDim2.new(1, 0, 0, 52),
     BackgroundColor3 = Theme.Card,
     BorderSizePixel = 0,
-    LayoutOrder = 7,
+    LayoutOrder = 6,
     Parent = PageTravel,
 })
 addCorner(freeCamTip, 12)
@@ -2167,7 +1982,7 @@ createInstance("TextLabel", {
     Parent = freeCamTip,
 })
 
-createSection(PageTravel, "Locations", 8)
+createSection(PageTravel, "Locations", 7)
 
 local locationHolder = createInstance("Frame", {
     Size = UDim2.new(1, 0, 0, 0),
@@ -2204,14 +2019,13 @@ local function refreshLocations()
             Parent = row,
         })
 
-        local dot = createInstance("Frame", {
+        createInstance("Frame", {
             Size = UDim2.new(0, 7, 0, 7),
             Position = UDim2.new(0, 14, 0, 16),
             BackgroundColor3 = data.onSteal and Theme.Success or Theme.TextMute,
             BorderSizePixel = 0,
             Parent = row,
         })
-        addCorner(dot, 4)
 
         createInstance("TextLabel", {
             Size = UDim2.new(1, -150, 0, 16),
@@ -2333,7 +2147,7 @@ local addLocationBtn = createInstance("TextButton", {
     BorderSizePixel = 0,
     Text = "",
     AutoButtonColor = false,
-    LayoutOrder = 9,
+    LayoutOrder = 8,
     Parent = PageTravel,
 })
 addCorner(addLocationBtn, 12)
@@ -2482,8 +2296,8 @@ local function openAddLocation()
         return toggle, knob
     end
 
-    local autoToggle, autoKnob     = makePopupToggle(94, "Auto on steal")
-    local returnToggle, returnKnob = makePopupToggle(140, "Return after")
+    local autoToggle, autoKnob       = makePopupToggle(94, "Auto on steal")
+    local returnToggle, returnKnob   = makePopupToggle(140, "Return after")
 
     autoToggle.MouseButton1Click:Connect(function()
         autoOn = not autoOn
@@ -2576,18 +2390,40 @@ end
 
 addLocationBtn.MouseButton1Click:Connect(openAddLocation)
 
---==============================================================
--- PICKUP LOGIC
---==============================================================
-local PickupConn       = nil
-local PickupCount      = 0
-local PickupModeAll    = true
-local SelectedItems    = {}
-local ScannedItems     = {}
+local PickupConn      = nil
+local PickupCount     = 0
+local PickupModeAll   = true
+local SelectedItems   = {}
+local ScannedItems    = {}
 local PickupFilterText = ""
-local PickupListRows   = {}
+local PickupListRows  = {}
 local refreshPickupList
-local PickupTraveling  = false
+local PickupTraveling = false
+
+local function firePrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+    if not prompt.Enabled then return false end
+
+    local success = false
+    pcall(function()
+        if fireproximityprompt then
+            fireproximityprompt(prompt)
+            success = true
+        end
+    end)
+
+    if not success then
+        pcall(function()
+            prompt.HoldDuration = 0
+            prompt:InputHoldBegin()
+            task.wait(0.05)
+            prompt:InputHoldEnd()
+            success = true
+        end)
+    end
+
+    return success
+end
 
 local function tryTouchPickup(part)
     if not part or not part:IsA("BasePart") or not Root then return end
@@ -2611,10 +2447,31 @@ local function itemAllowed(name)
     return SelectedItems[name] == true
 end
 
+local function getItemPosition(object)
+    if object:IsA("BasePart") then return object.Position end
+
+    if object:IsA("Model") then
+        local ok, pivot = pcall(function() return object:GetPivot().Position end)
+        if ok then return pivot end
+    end
+
+    if object:IsA("ProximityPrompt") and object.Parent then
+        return getItemPosition(object.Parent)
+    end
+
+    if object:IsA("Tool") then
+        local handle = object:FindFirstChild("Handle")
+        if handle then return handle.Position end
+    end
+
+    return nil
+end
+
 local function travelToPickup(targetPos, label)
     if not targetPos or not Root then return false end
 
-    local targetCF = CFrame.new(targetPos, Vector3.new(Root.Position.X, targetPos.Y, Root.Position.Z))
+    local targetCF = CFrame.new(targetPos)
+    targetCF = CFrame.new(targetPos, Vector3.new(Root.Position.X, targetPos.Y, Root.Position.Z))
     return travelTo(targetCF, label)
 end
 
@@ -2802,25 +2659,29 @@ end
 
 local function pickupLoop()
     while Config.AutoPickup do
-        if Config.PickupTotal > 0 and Config.PickupDone >= Config.PickupTotal then
-            if toastFn then
-                toastFn(
-                    "Pickup total reached · " .. Config.PickupDone .. "/" .. Config.PickupTotal,
-                    Theme.Success
-                )
-            end
-            Config.AutoPickup = false
-            break
-        end
-
         local waitTime = tonumber(Config.PickupDelay) or 0.25
         local range    = tonumber(Config.PickupRange) or 20
+        local limit    = tonumber(Config.PickupLimit) or 0
+
+        if limit > 0 and Config.PickupCount >= limit then
+            task.wait(Config.PickupWaitAfterLimit)
+
+            if Config.AutoPickup then
+                Config.PickupCount = 0
+                PickupCount = 0
+                if toastFn then
+                    toastFn("Pickup limit reached · resetting cycle", Theme.Accent)
+                end
+            end
+            task.wait(waitTime)
+            continue
+        end
 
         local direct = 0
         pcall(function() direct = collectNearbyDirect() end)
         if direct > 0 then
             PickupCount = PickupCount + direct
-            Config.PickupDone = Config.PickupDone + direct
+            Config.PickupCount = Config.PickupCount + direct
         end
 
         if not PickupTraveling and Root and Root.Parent then
@@ -2857,7 +2718,7 @@ local function pickupLoop()
                             end
 
                             PickupCount = PickupCount + 1
-                            Config.PickupDone = Config.PickupDone + 1
+                            Config.PickupCount = Config.PickupCount + 1
                         end
 
                         PickupTraveling = false
@@ -2873,7 +2734,7 @@ end
 
 local function startAutoPickup()
     if PickupConn then return end
-    Config.PickupDone = 0
+    Config.PickupCount = 0
     PickupCount = 0
     PickupConn = true
     task.spawn(pickupLoop)
@@ -2886,9 +2747,6 @@ local function stopAutoPickup()
     stopWalk()
 end
 
---==============================================================
--- PAGE: PICKUP
---==============================================================
 createSection(PagePickup, "Auto Pickup", 1)
 
 createToggleRow(PagePickup, {
@@ -2932,17 +2790,20 @@ createNumberRow(PagePickup, {
 })
 
 createNumberRow(PagePickup, {
-    name = "Pickup Total",
-    desc = "Stop after N items (0 = unlimited)",
+    name = "Pickup Limit",
+    desc = "Items per cycle (0 = unlimited)",
     order = 5,
-    value = tostring(Config.PickupTotal),
+    value = tostring(Config.PickupLimit),
     callback = function(value)
-        Config.PickupTotal = math.floor(value)
+        Config.PickupLimit = math.max(0, math.floor(value))
+        Config.PickupCount = 0
+        PickupCount = 0
         if toastFn then
-            local txt = Config.PickupTotal > 0
-                and ("Pickup limit: " .. Config.PickupTotal)
-                or "Pickup limit: unlimited"
-            toastFn(txt, Theme.Accent)
+            if Config.PickupLimit == 0 then
+                toastFn("Pickup limit: UNLIMITED", Theme.Accent)
+            else
+                toastFn("Pickup limit: " .. tostring(Config.PickupLimit) .. " per cycle", Theme.Accent)
+            end
         end
     end,
 })
@@ -3250,17 +3111,14 @@ task.spawn(function()
     while pickupStatusCard and pickupStatusCard.Parent do
         local mode   = PickupModeAll and "ALL" or "SELECTED"
         local travel = Config.TravelMode == "walk" and "walk" or "tp"
+        local limitText = Config.PickupLimit > 0
+            and ("[" .. tostring(Config.PickupCount) .. "/" .. tostring(Config.PickupLimit) .. "]")
+            or ""
 
         if Config.AutoPickup then
-            local progress
-            if Config.PickupTotal > 0 then
-                progress = " · " .. Config.PickupDone .. "/" .. Config.PickupTotal
-            else
-                progress = " · ~" .. tostring(PickupCount)
-            end
-
             pickupStatusValue.Text = "ON · " .. mode .. " · " .. travel
-                .. " · r" .. tostring(Config.PickupRange) .. progress
+                .. " · r" .. tostring(Config.PickupRange) .. " · ~" .. tostring(PickupCount)
+                .. " " .. limitText
             pickupStatusValue.TextColor3 = Theme.Success
         else
             pickupStatusValue.Text = "OFF · " .. mode .. " · r" .. tostring(Config.PickupRange)
@@ -3271,9 +3129,6 @@ task.spawn(function()
     end
 end)
 
---==============================================================
--- PAGE: PLAYERS
---==============================================================
 createSection(PagePlayers, "Online", 1)
 
 local playersHolder = createInstance("Frame", {
@@ -3408,10 +3263,8 @@ Players.PlayerRemoving:Connect(function(player)
     refreshPlayers()
 end)
 
---==============================================================
--- PAGE: SCRIPT EXECUTOR
---==============================================================
 local ScriptLogLines = {}
+local SCRIPT_LOG_MAX = 200
 local ScriptRunning  = false
 local refreshScriptLog
 
@@ -3879,132 +3732,130 @@ end)
 
 appendScriptLog("Script executor ready", Theme.Success)
 
---==============================================================
--- WINDOW SHOW / HIDE / MINIMIZE / DRAG
---==============================================================
-local savedPosition = Shell.Position
-local hidden, animating = false, false
+do
+    local savedPosition = Shell.Position
+    local hidden, animating = false, false
 
-local function restoreContent()
-    minimized = false
-    TabBar.Visible = true
-    Header.Visible = true
-    Shell.Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT)
-    switchTab(ActiveTab or "main")
-end
+    local function restoreContent()
+        minimized = false
+        TabBar.Visible = true
+        Header.Visible = true
+        Shell.Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT)
+        switchTab(ActiveTab or "main")
+    end
 
-local function showWindow()
-    if animating or not hidden then return end
-    animating = true
+    local function showWindow()
+        if animating or not hidden then return end
+        animating = true
 
-    Shell.Position = savedPosition
-    Shell.Visible = true
-    restoreContent()
+        Shell.Position = savedPosition
+        Shell.Visible = true
+        restoreContent()
 
-    Shell.Size = UDim2.new(0, UI_WIDTH, 0, 0)
-    local tween = TweenService:Create(Shell, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT),
-    })
-    tween:Play()
-    tween.Completed:Wait()
-
-    restoreContent()
-    hidden, animating = false, false
-end
-
-local function hideWindow()
-    if animating or hidden then return end
-    animating = true
-
-    minimized = false
-    TabBar.Visible = true
-
-    local tween = TweenService:Create(Shell, TweenInfo.new(0.18), {
-        Size = UDim2.new(0, UI_WIDTH, 0, 0),
-    })
-    tween:Play()
-    tween.Completed:Wait()
-
-    Shell.Visible = false
-    Shell.Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT)
-
-    FloatBtn.Visible = true
-    FloatBtn.Size = UDim2.new(0, 0, 0, 0)
-
-    local floatTween = TweenService:Create(FloatBtn, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 46, 0, 46),
-    })
-    floatTween:Play()
-    floatTween.Completed:Wait()
-
-    hidden, animating = true, false
-end
-
-CloseBtn.MouseButton1Click:Connect(function()
-    savedPosition = Shell.Position
-    hideWindow()
-end)
-
-FloatBtn.MouseButton1Click:Connect(function()
-    task.spawn(function()
-        local tween = TweenService:Create(FloatBtn, TweenInfo.new(0.12), {
-            Size = UDim2.new(0, 0, 0, 0),
+        Shell.Size = UDim2.new(0, UI_WIDTH, 0, 0)
+        local tween = TweenService:Create(Shell, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT),
         })
         tween:Play()
         tween.Completed:Wait()
 
-        FloatBtn.Visible = false
-        showWindow()
-    end)
-end)
+        restoreContent()
+        hidden, animating = false, false
+    end
 
-MinimizeBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    if minimized then
-        TabBar.Visible = false
-        for _, data in pairs(Pages) do data.page.Visible = false end
-        TweenService:Create(Shell, TweenInfo.new(0.22), {
-            Size = UDim2.new(0, UI_WIDTH, 0, 54),
-        }):Play()
-    else
+    local function hideWindow()
+        if animating or hidden then return end
+        animating = true
+
+        minimized = false
         TabBar.Visible = true
-        switchTab(ActiveTab)
-        TweenService:Create(Shell, TweenInfo.new(0.22), {
-            Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT),
-        }):Play()
-    end
-end)
 
-local dragging, dragStart, dragStartPos
-Header.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        dragStartPos = Shell.Position
-    end
-end)
+        local tween = TweenService:Create(Shell, TweenInfo.new(0.18), {
+            Size = UDim2.new(0, UI_WIDTH, 0, 0),
+        })
+        tween:Play()
+        tween.Completed:Wait()
 
-UserInputService.InputChanged:Connect(function(input)
-    if not dragging then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement
-    or input.UserInputType == Enum.UserInputType.Touch then
-        local delta = input.Position - dragStart
-        Shell.Position = UDim2.new(
-            dragStartPos.X.Scale, dragStartPos.X.Offset + delta.X,
-            dragStartPos.Y.Scale, dragStartPos.Y.Offset + delta.Y
-        )
-    end
-end)
+        Shell.Visible = false
+        Shell.Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT)
 
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputState == Enum.UserInputState.End and dragging then
-        dragging = false
+        FloatBtn.Visible = true
+        FloatBtn.Size = UDim2.new(0, 0, 0, 0)
+
+        local floatTween = TweenService:Create(FloatBtn, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, 46, 0, 46),
+        })
+        floatTween:Play()
+        floatTween.Completed:Wait()
+
+        hidden, animating = true, false
+    end
+
+    CloseBtn.MouseButton1Click:Connect(function()
         savedPosition = Shell.Position
-    end
-end)
+        hideWindow()
+    end)
 
-do
+    FloatBtn.MouseButton1Click:Connect(function()
+        task.spawn(function()
+            local tween = TweenService:Create(FloatBtn, TweenInfo.new(0.12), {
+                Size = UDim2.new(0, 0, 0, 0),
+            })
+            tween:Play()
+            tween.Completed:Wait()
+
+            FloatBtn.Visible = false
+            showWindow()
+        end)
+    end)
+
+    MinimizeBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        if minimized then
+            TabBar.Visible = false
+            for _, data in pairs(Pages) do data.page.Visible = false end
+            TweenService:Create(Shell, TweenInfo.new(0.22), {
+                Size = UDim2.new(0, UI_WIDTH, 0, 54),
+            }):Play()
+        else
+            TabBar.Visible = true
+            switchTab(ActiveTab)
+            TweenService:Create(Shell, TweenInfo.new(0.22), {
+                Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT),
+            }):Play()
+        end
+    end)
+
+    local dragging, dragStart, dragStartPos
+
+    Header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            dragStartPos = Shell.Position
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStart
+            Shell.Position = UDim2.new(
+                dragStartPos.X.Scale, dragStartPos.X.Offset + delta.X,
+                dragStartPos.Y.Scale, dragStartPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputState == Enum.UserInputState.End and dragging then
+            dragging = false
+            savedPosition = Shell.Position
+        end
+    end)
+
     local floating, floatStart, floatStartPos
     FloatBtn.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -4032,9 +3883,6 @@ do
     end)
 end
 
---==============================================================
--- TOAST NOTIFICATIONS
---==============================================================
 toastFn = function(message, color)
     color = color or Theme.Accent
 
@@ -4086,10 +3934,4 @@ toastFn = function(message, color)
     end)
 end
 
-toastFn("Ghost Walk v9.6 · ready", Theme.Success)
-
---==============================================================
--- END OF SCRIPT WRAPPER
---==============================================================
-return true
-end)()
+toastFn("Ghost Walk v9.4 · ready", Theme.Success)
