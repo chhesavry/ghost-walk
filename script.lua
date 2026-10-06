@@ -1,11 +1,11 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║                       GHOST WALK v9.5                        ║
+    ║                       GHOST WALK v9.6                        ║
     ║   Movement · Travel · Pickup · Players · Script Executor     ║
-    ║                                                              ║
-    ║   Free Cam Action · Pickup Total Limit · Steal Return        ║
     ╚══════════════════════════════════════════════════════════════╝
 ]]
+
+return (function()
 
 --==============================================================
 -- SERVICES
@@ -37,7 +37,6 @@ local SCRIPT_LOG_MAX  = 200
 -- CONFIGURATION
 --==============================================================
 local Config = {
-    -- Movement
     Speed        = 100,
     DefaultSpeed = 16,
     BoostActive  = false,
@@ -46,26 +45,18 @@ local Config = {
     GodMode      = false,
     FlyActive    = false,
     FlyHeight    = 25,
-
-    -- Travel
-    TravelMode  = "teleport", -- "teleport" | "walk"
-    ReturnDelay = 1.0,
-
-    -- Performance
-    FpsBoost = false,
-
-    -- Free Cam
+    TravelMode   = "teleport",
+    ReturnDelay  = 1.0,
+    FpsBoost     = false,
     FreeCam         = false,
     FreeCamSpeed    = 60,
-    FreeCamAction   = false,   -- auto-fire prompts near camera
-    FreeCamRange    = 15,      -- studs around camera
-
-    -- Auto Pickup
+    FreeCamAction   = false,
+    FreeCamRange    = 15,
     AutoPickup   = false,
     PickupRange  = 20,
     PickupDelay  = 0.25,
-    PickupTotal  = 0,          -- 0 = unlimited; stops when reached
-    PickupDone   = 0,          -- internal session counter
+    PickupTotal  = 0,
+    PickupDone   = 0,
 }
 
 --==============================================================
@@ -752,7 +743,7 @@ createInstance("TextLabel", {
     Size = UDim2.new(1, -120, 0, 14),
     Position = UDim2.new(0, 54, 0, 28),
     BackgroundTransparency = 1,
-    Text = "v9.5  ·  travel · pickup · freecam · script",
+    Text = "v9.6  ·  travel · pickup · freecam · script",
     TextColor3 = Theme.TextMute,
     Font = Theme.Font,
     TextSize = 10,
@@ -4095,4 +4086,10 @@ toastFn = function(message, color)
     end)
 end
 
-toastFn("Ghost Walk v9.5 · ready", Theme.Success)
+toastFn("Ghost Walk v9.6 · ready", Theme.Success)
+
+--==============================================================
+-- END OF SCRIPT WRAPPER
+--==============================================================
+return true
+end)()
