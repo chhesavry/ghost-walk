@@ -1,0 +1,1162 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Player = Players.LocalPlayer
+
+local SPAWN = Vector3.new(905.876953125, 119.44934844970703, -207.88572692871094)
+
+local RARITY_COLORS = {
+    Common=Color3.fromRGB(170,170,180), Uncommon=Color3.fromRGB(100,210,120),
+    Rare=Color3.fromRGB(70,150,255),    Epic=Color3.fromRGB(180,90,255),
+    Legendary=Color3.fromRGB(255,180,60), Mythic=Color3.fromRGB(255,90,90),
+    Mythical=Color3.fromRGB(255,90,90),  Celestial=Color3.fromRGB(120,240,220),
+    Divine=Color3.fromRGB(255,220,120),  Transcendent=Color3.fromRGB(255,130,255),
+    Secret=Color3.fromRGB(255,60,60),
+}
+local RARITY_RANK = {
+    Common=1,Uncommon=2,Rare=3,Epic=4,Legendary=5,Mythic=6,Mythical=6,
+    Celestial=7,Divine=8,Transcendent=9,Secret=10,
+}
+local ALL_RARITIES = {
+    "Common","Uncommon","Rare","Epic","Legendary",
+    "Mythic","Celestial","Divine","Transcendent","Secret",
+}
+
+local C = {
+    Bg        = Color3.fromRGB(13, 13, 17),
+    Panel     = Color3.fromRGB(20, 20, 26),
+    Panel2    = Color3.fromRGB(26, 26, 34),
+    Row       = Color3.fromRGB(30, 30, 39),
+    RowHover  = Color3.fromRGB(38, 38, 49),
+    RowActive = Color3.fromRGB(36, 60, 45),
+    Accent    = Color3.fromRGB(90, 210, 130),
+    Accent2   = Color3.fromRGB(60, 140, 90),
+    Text      = Color3.fromRGB(240, 240, 245),
+    Sub       = Color3.fromRGB(150, 150, 165),
+    Mute      = Color3.fromRGB(95, 95, 110),
+    Divider   = Color3.fromRGB(35, 35, 45),
+    Danger    = Color3.fromRGB(230, 90, 90),
+    Warn      = Color3.fromRGB(255, 175, 70),
+    Dist      = Color3.fromRGB(255, 200, 120),
+    AutoOn    = Color3.fromRGB(80, 200, 120),
+    AutoOff   = Color3.fromRGB(180, 70, 70),
+    CheckOn   = Color3.fromRGB(90, 210, 130),
+    CheckOff  = Color3.fromRGB(48, 48, 60),
+}
+
+local state = {
+    biomes = {},
+    selectedZones = {},
+    selectedRarities = {},
+    autoSteal = false,
+    autoLoop = nil,
+    status = "Ready",
+    currentTarget = nil,
+    minimized = false,
+    bodyHeight = 540,
+    foundTargets = {},
+    lastUpdate = 0,
+}
+
+local function attr(inst, k)
+    local ok, v = pcall(function() return inst:GetAttribute(k) end)
+    if ok then return v end
+end
+
+local function new(class, props)
+    local inst = Instance.new(class)
+    for k, v in pairs(props or {}) do inst[k] = v end
+    return inst
+end
+
+local function prettyName(raw)
+    return (raw:gsub("^%d+_", ""):gsub("_", " "))
+end
+
+local function isEgg(inst)
+    if not inst:IsA("Model") then return false end
+    if inst.Name == "Egg" then return true end
+    if inst.Name:match("^Egg_") then return true end
+    local ok, kind = pcall(function() return inst:GetAttribute("Kind") end)
+    return ok and kind == "Egg"
+end
+
+local function countEggs(inst)
+    local n = 0
+    for _, d in ipairs(inst:GetDescendants()) do
+        if isEgg(d) then n = n + 1 end
+    end
+    return n
+end
+
+local function biomeDistance(containers)
+    local best = math.huge
+    for _, c in ipairs(containers) do
+        local pos
+        if c:IsA("BasePart") then pos = c.Position
+        elseif c:IsA("Model") then pcall(function() pos = c:GetPivot().Position end) end
+        if not pos then
+            for _, d in ipairs(c:GetDescendants()) do
+                if d:IsA("BasePart") then pos = d.Position break end
+            end
+        end
+        if pos then
+            local dist = (pos - SPAWN).Magnitude
+            if dist < best then best = dist end
+        end
+    end
+    return best
+end
+
+local function discoverBiomes()
+    local found, seen = {}, {}
+
+    local function add(container)
+        if not container or seen[container] then return end
+        seen[container] = true
+        local pretty = prettyName(container.Name)
+        if pretty == "" then return end
+        local count = countEggs(container)
+        if count == 0 and not container.Name:match("^%d+_") then return end
+        if not found[pretty] then
+            found[pretty] = { Name = pretty, Containers = {}, EggCount = 0 }
+        end
+        table.insert(found[pretty].Containers, container)
+        found[pretty].EggCount = found[pretty].EggCount + count
+    end
+
+    local map = workspace:FindFirstChild("Map")
+    if map then
+        for _, child in ipairs(map:GetChildren()) do
+            if (child:IsA("Folder") or child:IsA("Model")) and child.Name:match("^%d+_") then
+                add(child)
+            end
+            if child.Name == "BiomeNests" then
+                for _, sub in ipairs(child:GetChildren()) do add(sub) end
+            end
+        end
+    end
+
+    local keywords = {
+        "Forest","Swamp","Jungle","Desert","Ocean","Prehistoric",
+        "Volcano","Haunted","Candy","Sky","Nether","Ice","Fire",
+        "Space","Mythic","Heaven","Hell","Cave","Mountain","Beach",
+    }
+    for _, inst in ipairs(workspace:GetDescendants()) do
+        if (inst:IsA("Folder") or inst:IsA("Model")) and countEggs(inst) > 0 then
+            for _, kw in ipairs(keywords) do
+                if inst.Name:lower():find(kw:lower(), 1, true) then
+                    add(inst)
+                    break
+                end
+            end
+        end
+    end
+
+    local list = {}
+    for _, b in pairs(found) do
+        b.Distance = biomeDistance(b.Containers)
+        table.insert(list, b)
+    end
+    table.sort(list, function(a, b) return a.Distance < b.Distance end)
+    return list
+end
+
+local function scanBiomeContainers(containers)
+    local eggs, seenEggs = {}, {}
+    for _, container in ipairs(containers) do
+        for _, d in ipairs(container:GetDescendants()) do
+            if isEgg(d) and not seenEggs[d] then
+                seenEggs[d] = true
+                local pos
+                pcall(function() pos = d:GetPivot().Position end)
+                table.insert(eggs, {
+                    Instance = d,
+                    Nest     = d.Parent and d.Parent.Name or "?",
+                    Rarity   = attr(d, "Rarity") or "?",
+                    Species  = attr(d, "Species") or d.Name,
+                    Mutation = attr(d, "BaseMutation") or "-",
+                    Position = pos,
+                    Key      = d:GetFullName(),
+                })
+            end
+        end
+    end
+    table.sort(eggs, function(a, b)
+        local ra, rb = RARITY_RANK[a.Rarity] or 0, RARITY_RANK[b.Rarity] or 0
+        if ra ~= rb then return ra > rb end
+        return a.Species < b.Species
+    end)
+    return eggs
+end
+
+local function teleportTo(pos)
+    if not pos then return false end
+    local char = Player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+
+    local targetCF = CFrame.new(pos + Vector3.new(0, 5, 0))
+    pcall(function()
+        char:PivotTo(targetCF)
+    end)
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
+    return true
+end
+
+local function getRoot()
+    local char = Player.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function firePrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+    if not prompt.Enabled then return false end
+    local success = false
+    pcall(function()
+        if fireproximityprompt then
+            fireproximityprompt(prompt)
+            success = true
+        end
+    end)
+    if not success then
+        pcall(function()
+            prompt.HoldDuration = 0
+            prompt:InputHoldBegin()
+            task.wait(0.05)
+            prompt:InputHoldEnd()
+            success = true
+        end)
+    end
+    return success
+end
+
+local function tryTouchPickup(part)
+    if not part or not part:IsA("BasePart") then return end
+    local root = getRoot()
+    if not root then return end
+    pcall(function()
+        if firetouchinterest then
+            firetouchinterest(part, root, 0)
+            firetouchinterest(part, root, 1)
+        end
+    end)
+end
+
+local function eggStillExists(eggInstance)
+    if not eggInstance then return false end
+    local ok, parent = pcall(function() return eggInstance.Parent end)
+    if not ok or not parent then return false end
+    local stillThere = false
+    pcall(function()
+        stillThere = eggInstance:IsDescendantOf(workspace)
+    end)
+    return stillThere
+end
+
+local function attemptSteal(egg, timeout)
+    timeout = timeout or 8
+    local start = tick()
+    while tick() - start < timeout do
+        local promptFired = false
+        for _, d in ipairs(egg.Instance:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                if firePrompt(d) then promptFired = true end
+            end
+        end
+        if not promptFired and egg.Instance.Parent then
+            for _, d in ipairs(egg.Instance.Parent:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then firePrompt(d) end
+            end
+        end
+        for _, d in ipairs(egg.Instance:GetDescendants()) do
+            if d:IsA("BasePart") then tryTouchPickup(d) end
+        end
+        task.wait(0.35)
+        if not eggStillExists(egg.Instance) then return true end
+        if attr(egg.Instance, "Collected") == true then return true end
+    end
+    return false
+end
+
+local function getSelectedTargets()
+    local targets = {}
+    for _, biome in ipairs(state.biomes) do
+        if state.selectedZones[biome.Name] then
+            local eggs = scanBiomeContainers(biome.Containers)
+            for _, egg in ipairs(eggs) do
+                if state.selectedRarities[egg.Rarity] then
+                    egg.Biome = biome.Name
+                    egg.BiomeDistance = biome.Distance
+                    table.insert(targets, egg)
+                end
+            end
+        end
+    end
+    table.sort(targets, function(a, b)
+        if a.BiomeDistance ~= b.BiomeDistance then
+            return a.BiomeDistance < b.BiomeDistance
+        end
+        local ra = RARITY_RANK[a.Rarity] or 0
+        local rb = RARITY_RANK[b.Rarity] or 0
+        return ra > rb
+    end)
+    return targets
+end
+
+local old = Player.PlayerGui:FindFirstChild("JumpToStealAnEgg")
+if old then old:Destroy() end
+
+local gui = new("ScreenGui", {
+    Name = "JumpToStealAnEgg",
+    ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    IgnoreGuiInset = false,
+    Parent = Player.PlayerGui,
+})
+
+local main = new("Frame", {
+    Size = UDim2.new(0, 820, 0, 540),
+    Position = UDim2.new(0.5, -410, 0.5, -270),
+    BackgroundColor3 = C.Bg,
+    BorderSizePixel = 0,
+    Active = true,
+    Draggable = true,
+    Parent = gui,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 18), Parent = main })
+new("UIStroke", { Color = C.Divider, Thickness = 1, Parent = main })
+
+local header = new("Frame", {
+    Size = UDim2.new(1, 0, 0, 64),
+    BackgroundColor3 = C.Panel,
+    BorderSizePixel = 0,
+    Active = false,
+    Parent = main,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 18), Parent = header })
+new("Frame", {
+    Size = UDim2.new(1, 0, 0, 18),
+    Position = UDim2.new(0, 0, 1, -18),
+    BackgroundColor3 = C.Panel,
+    BorderSizePixel = 0,
+    Parent = header,
+})
+
+local logoBadge = new("Frame", {
+    Size = UDim2.new(0, 36, 0, 36),
+    Position = UDim2.new(0, 20, 0.5, -18),
+    BackgroundColor3 = C.Accent,
+    BorderSizePixel = 0,
+    Parent = header,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 10), Parent = logoBadge })
+new("TextLabel", {
+    Size = UDim2.new(1, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text = "E",
+    TextColor3 = Color3.fromRGB(255, 255, 255),
+    Font = Enum.Font.GothamBlack,
+    TextSize = 18,
+    Parent = logoBadge,
+})
+
+new("TextLabel", {
+    Size = UDim2.new(0, 300, 0, 20),
+    Position = UDim2.new(0, 68, 0, 14),
+    BackgroundTransparency = 1,
+    Text = "Jump to Steal An Egg",
+    TextColor3 = C.Text,
+    Font = Enum.Font.GothamBold,
+    TextSize = 16,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = header,
+})
+
+new("TextLabel", {
+    Size = UDim2.new(0, 300, 0, 14),
+    Position = UDim2.new(0, 68, 0, 34),
+    BackgroundTransparency = 1,
+    Text = "Filter zones & rarities · auto-steal selected targets",
+    TextColor3 = C.Sub,
+    Font = Enum.Font.Gotham,
+    TextSize = 11,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = header,
+})
+
+local liveBadge = new("Frame", {
+    Size = UDim2.new(0, 62, 0, 22),
+    Position = UDim2.new(1, -320, 0.5, -11),
+    BackgroundColor3 = C.Panel2,
+    BorderSizePixel = 0,
+    Parent = header,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 11), Parent = liveBadge })
+
+local liveDot = new("Frame", {
+    Size = UDim2.new(0, 6, 0, 6),
+    Position = UDim2.new(0, 10, 0.5, -3),
+    BackgroundColor3 = C.Accent,
+    BorderSizePixel = 0,
+    Parent = liveBadge,
+})
+new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = liveDot })
+
+new("TextLabel", {
+    Size = UDim2.new(1, -22, 1, 0),
+    Position = UDim2.new(0, 20, 0, 0),
+    BackgroundTransparency = 1,
+    Text = "LIVE",
+    TextColor3 = C.Accent,
+    Font = Enum.Font.GothamBold,
+    TextSize = 10,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = liveBadge,
+})
+
+task.spawn(function()
+    while liveDot.Parent do
+        TweenService:Create(liveDot, TweenInfo.new(0.5),
+            { BackgroundTransparency = 0.7 }):Play()
+        task.wait(0.5)
+        TweenService:Create(liveDot, TweenInfo.new(0.5),
+            { BackgroundTransparency = 0 }):Play()
+        task.wait(0.5)
+    end
+end)
+
+local autoBtn = new("TextButton", {
+    Size = UDim2.new(0, 160, 0, 40),
+    Position = UDim2.new(1, -246, 0.5, -20),
+    BackgroundColor3 = C.AutoOff,
+    BorderSizePixel = 0,
+    Text = "AUTO  OFF",
+    TextColor3 = Color3.fromRGB(255, 255, 255),
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    AutoButtonColor = false,
+    Parent = header,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 11), Parent = autoBtn })
+
+autoBtn.MouseEnter:Connect(function()
+    TweenService:Create(autoBtn, TweenInfo.new(0.12),
+        { BackgroundColor3 = state.autoSteal and Color3.fromRGB(100,220,140) or Color3.fromRGB(210, 90, 90) }):Play()
+end)
+autoBtn.MouseLeave:Connect(function()
+    TweenService:Create(autoBtn, TweenInfo.new(0.12),
+        { BackgroundColor3 = state.autoSteal and C.AutoOn or C.AutoOff }):Play()
+end)
+
+local minimizeBtn = new("TextButton", {
+    Size = UDim2.new(0, 38, 0, 38),
+    Position = UDim2.new(1, -80, 0.5, -19),
+    BackgroundColor3 = C.Panel2,
+    BorderSizePixel = 0,
+    Text = "—",
+    TextColor3 = C.Sub,
+    Font = Enum.Font.GothamBold,
+    TextSize = 18,
+    Parent = header,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 11), Parent = minimizeBtn })
+
+local closeBtn = new("TextButton", {
+    Size = UDim2.new(0, 38, 0, 38),
+    Position = UDim2.new(1, -38, 0.5, -19),
+    BackgroundColor3 = C.Panel2,
+    BorderSizePixel = 0,
+    Text = "×",
+    TextColor3 = C.Sub,
+    Font = Enum.Font.GothamBold,
+    TextSize = 20,
+    Parent = header,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 11), Parent = closeBtn })
+
+minimizeBtn.MouseEnter:Connect(function()
+    TweenService:Create(minimizeBtn, TweenInfo.new(0.12),
+        { BackgroundColor3 = C.RowHover }):Play()
+end)
+minimizeBtn.MouseLeave:Connect(function()
+    TweenService:Create(minimizeBtn, TweenInfo.new(0.12),
+        { BackgroundColor3 = C.Panel2 }):Play()
+end)
+closeBtn.MouseEnter:Connect(function()
+    TweenService:Create(closeBtn, TweenInfo.new(0.12),
+        { BackgroundColor3 = C.Danger }):Play()
+end)
+closeBtn.MouseLeave:Connect(function()
+    TweenService:Create(closeBtn, TweenInfo.new(0.12),
+        { BackgroundColor3 = C.Panel2 }):Play()
+end)
+
+local body = new("Frame", {
+    Size = UDim2.new(1, -32, 1, -80),
+    Position = UDim2.new(0, 16, 0, 72),
+    BackgroundTransparency = 1,
+    Active = false,
+    Parent = main,
+})
+
+local statsBar = new("Frame", {
+    Size = UDim2.new(1, 0, 0, 72),
+    BackgroundColor3 = C.Panel,
+    BorderSizePixel = 0,
+    Active = false,
+    Parent = body,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 12), Parent = statsBar })
+
+local function makeStat(x, label, color)
+    local holder = new("Frame", {
+        Size = UDim2.new(0.25, -12, 1, -16),
+        Position = UDim2.new(x, 8, 0, 8),
+        BackgroundTransparency = 1,
+        Active = false,
+        Parent = statsBar,
+    })
+
+    local dot = new("Frame", {
+        Size = UDim2.new(0, 8, 0, 8),
+        Position = UDim2.new(0, 4, 0, 6),
+        BackgroundColor3 = color,
+        BorderSizePixel = 0,
+        Parent = holder,
+    })
+    new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = dot })
+
+    new("TextLabel", {
+        Size = UDim2.new(1, -18, 0, 12),
+        Position = UDim2.new(0, 18, 0, 4),
+        BackgroundTransparency = 1,
+        Text = label,
+        TextColor3 = C.Mute,
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = holder,
+    })
+
+    local value = new("TextLabel", {
+        Size = UDim2.new(1, -8, 0, 26),
+        Position = UDim2.new(0, 4, 0, 20),
+        BackgroundTransparency = 1,
+        Text = "0",
+        TextColor3 = C.Text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 20,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = holder,
+    })
+
+    if x > 0 then
+        new("Frame", {
+            Size = UDim2.new(0, 1, 1, -16),
+            Position = UDim2.new(x, -6, 0, 8),
+            BackgroundColor3 = C.Divider,
+            BorderSizePixel = 0,
+            Parent = statsBar,
+        })
+    end
+
+    return value
+end
+
+local statTargets  = makeStat(0,    "TARGETS",  C.Accent)
+local statZones    = makeStat(0.25, "ZONES",    Color3.fromRGB(90, 170, 255))
+local statRarities = makeStat(0.5,  "RARITIES", C.Warn)
+local statStatus   = makeStat(0.75, "STATUS",   C.Mute)
+statStatus.TextSize = 13
+statStatus.Text = "Ready"
+
+local columns = new("Frame", {
+    Size = UDim2.new(1, 0, 1, -84),
+    Position = UDim2.new(0, 0, 0, 84),
+    BackgroundTransparency = 1,
+    Active = false,
+    Parent = body,
+})
+
+local leftCol = new("Frame", {
+    Size = UDim2.new(0, 250, 1, 0),
+    BackgroundColor3 = C.Panel,
+    BorderSizePixel = 0,
+    Active = false,
+    Parent = columns,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 12), Parent = leftCol })
+
+local filterHead = new("Frame", {
+    Size = UDim2.new(1, 0, 0, 46),
+    BackgroundTransparency = 1,
+    Active = false,
+    Parent = leftCol,
+})
+
+new("TextLabel", {
+    Size = UDim2.new(1, -80, 0, 16),
+    Position = UDim2.new(0, 16, 0, 14),
+    BackgroundTransparency = 1,
+    Text = "FILTERS",
+    TextColor3 = C.Text,
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = filterHead,
+})
+
+new("TextLabel", {
+    Size = UDim2.new(1, -80, 0, 12),
+    Position = UDim2.new(0, 16, 0, 28),
+    BackgroundTransparency = 1,
+    Text = "Select targets to steal",
+    TextColor3 = C.Mute,
+    Font = Enum.Font.Gotham,
+    TextSize = 10,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = filterHead,
+})
+
+local clearFilterBtn = new("TextButton", {
+    Size = UDim2.new(0, 56, 0, 26),
+    Position = UDim2.new(1, -68, 0.5, -13),
+    BackgroundColor3 = C.Panel2,
+    BorderSizePixel = 0,
+    Text = "CLEAR",
+    TextColor3 = C.Sub,
+    Font = Enum.Font.GothamBold,
+    TextSize = 9,
+    AutoButtonColor = false,
+    Parent = filterHead,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 7), Parent = clearFilterBtn })
+
+clearFilterBtn.MouseEnter:Connect(function()
+    TweenService:Create(clearFilterBtn, TweenInfo.new(0.1),
+        { BackgroundColor3 = C.RowHover }):Play()
+end)
+clearFilterBtn.MouseLeave:Connect(function()
+    TweenService:Create(clearFilterBtn, TweenInfo.new(0.1),
+        { BackgroundColor3 = C.Panel2 }):Play()
+end)
+
+new("Frame", {
+    Size = UDim2.new(1, -24, 0, 1),
+    Position = UDim2.new(0, 12, 0, 46),
+    BackgroundColor3 = C.Divider,
+    BorderSizePixel = 0,
+    Parent = leftCol,
+})
+
+local filterScroll = new("ScrollingFrame", {
+    Size = UDim2.new(1, -16, 1, -60),
+    Position = UDim2.new(0, 8, 0, 52),
+    BackgroundTransparency = 1,
+    BorderSizePixel = 0,
+    ScrollBarThickness = 3,
+    ScrollBarImageColor3 = C.Accent2,
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    Parent = leftCol,
+})
+new("UIListLayout", {
+    Padding = UDim.new(0, 4),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+    Parent = filterScroll,
+})
+new("UIPadding", {
+    PaddingRight = UDim.new(0, 8),
+    Parent = filterScroll,
+})
+
+local function makeSectionLabel(text, order)
+    local lbl = new("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 24),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = C.Mute,
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = order,
+        Parent = filterScroll,
+    })
+    return lbl
+end
+
+local function makeCheckRow(label, order, isChecked, accentColor, onToggle)
+    accentColor = accentColor or C.CheckOn
+
+    local row = new("TextButton", {
+        Size = UDim2.new(1, 0, 0, 34),
+        BackgroundColor3 = C.Row,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false,
+        LayoutOrder = order,
+        Parent = filterScroll,
+    })
+    new("UICorner", { CornerRadius = UDim.new(0, 8), Parent = row })
+
+    local box = new("Frame", {
+        Size = UDim2.new(0, 20, 0, 20),
+        Position = UDim2.new(0, 8, 0.5, -10),
+        BackgroundColor3 = isChecked and accentColor or C.CheckOff,
+        BorderSizePixel = 0,
+        Parent = row,
+    })
+    new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = box })
+
+    local checkIcon = new("TextLabel", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = isChecked and "✓" or "",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        Parent = box,
+    })
+
+    local lbl = new("TextLabel", {
+        Size = UDim2.new(1, -40, 1, 0),
+        Position = UDim2.new(0, 36, 0, 0),
+        BackgroundTransparency = 1,
+        Text = label,
+        TextColor3 = isChecked and C.Text or C.Sub,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Parent = row,
+    })
+
+    local function setVisual(on)
+        box.BackgroundColor3 = on and accentColor or C.CheckOff
+        checkIcon.Text = on and "✓" or ""
+        lbl.TextColor3 = on and C.Text or C.Sub
+    end
+
+    row.MouseEnter:Connect(function()
+        TweenService:Create(row, TweenInfo.new(0.1),
+            { BackgroundColor3 = C.RowHover }):Play()
+    end)
+    row.MouseLeave:Connect(function()
+        TweenService:Create(row, TweenInfo.new(0.1),
+            { BackgroundColor3 = C.Row }):Play()
+    end)
+
+    row.MouseButton1Click:Connect(function()
+        local on = onToggle()
+        setVisual(on)
+    end)
+end
+
+local function buildFilterPanel()
+    for _, c in ipairs(filterScroll:GetChildren()) do
+        if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
+    end
+
+    local order = 1
+
+    makeSectionLabel("ZONES", order)
+    order = order + 1
+
+    for _, biome in ipairs(state.biomes) do
+        local b = biome
+        makeCheckRow(b.Name, order, state.selectedZones[b.Name] == true, C.Accent, function()
+            state.selectedZones[b.Name] = not state.selectedZones[b.Name]
+            return state.selectedZones[b.Name]
+        end)
+        order = order + 1
+    end
+
+    order = order + 1
+    makeSectionLabel("RARITIES", order)
+    order = order + 1
+
+    for _, rarity in ipairs(ALL_RARITIES) do
+        local r = rarity
+        local color = RARITY_COLORS[r] or C.CheckOn
+        makeCheckRow(r, order, state.selectedRarities[r] == true, color, function()
+            state.selectedRarities[r] = not state.selectedRarities[r]
+            return state.selectedRarities[r]
+        end)
+        order = order + 1
+    end
+end
+
+clearFilterBtn.MouseButton1Click:Connect(function()
+    state.selectedZones = {}
+    state.selectedRarities = {}
+    buildFilterPanel()
+end)
+
+local rightCol = new("Frame", {
+    Size = UDim2.new(1, -262, 1, 0),
+    Position = UDim2.new(0, 262, 0, 0),
+    BackgroundColor3 = C.Panel,
+    BorderSizePixel = 0,
+    Active = false,
+    Parent = columns,
+})
+new("UICorner", { CornerRadius = UDim.new(0, 12), Parent = rightCol })
+
+local targetHead = new("Frame", {
+    Size = UDim2.new(1, 0, 0, 46),
+    BackgroundTransparency = 1,
+    Active = false,
+    Parent = rightCol,
+})
+
+new("TextLabel", {
+    Size = UDim2.new(1, -100, 0, 16),
+    Position = UDim2.new(0, 16, 0, 14),
+    BackgroundTransparency = 1,
+    Text = "MATCHED TARGETS",
+    TextColor3 = C.Text,
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = targetHead,
+})
+
+local lastUpdateLbl = new("TextLabel", {
+    Size = UDim2.new(1, -100, 0, 12),
+    Position = UDim2.new(0, 16, 0, 28),
+    BackgroundTransparency = 1,
+    Text = "Live scanning…",
+    TextColor3 = C.Mute,
+    Font = Enum.Font.Gotham,
+    TextSize = 10,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = targetHead,
+})
+
+new("Frame", {
+    Size = UDim2.new(1, -24, 0, 1),
+    Position = UDim2.new(0, 12, 0, 46),
+    BackgroundColor3 = C.Divider,
+    BorderSizePixel = 0,
+    Parent = rightCol,
+})
+
+local targetScroll = new("ScrollingFrame", {
+    Size = UDim2.new(1, -16, 1, -60),
+    Position = UDim2.new(0, 8, 0, 52),
+    BackgroundTransparency = 1,
+    BorderSizePixel = 0,
+    ScrollBarThickness = 3,
+    ScrollBarImageColor3 = C.Accent2,
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    Parent = rightCol,
+})
+new("UIListLayout", {
+    Padding = UDim.new(0, 6),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+    Parent = targetScroll,
+})
+new("UIPadding", {
+    PaddingRight = UDim.new(0, 8),
+    Parent = targetScroll,
+})
+
+local function renderTargets()
+    for _, c in ipairs(targetScroll:GetChildren()) do        if c:IsA("TextButton") or c:IsA("TextLabel") or c:IsA("Frame") then
+            c:Destroy()
+        end
+    end
+
+    local targets = getSelectedTargets()
+    state.foundTargets = targets
+
+    if #targets == 0 then
+        local empty = new("Frame", {
+            Size = UDim2.new(1, 0, 0, 140),
+            BackgroundTransparency = 1,
+            Active = false,
+            Parent = targetScroll,
+        })
+        new("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 24),
+            Position = UDim2.new(0, 0, 0, 40),
+            BackgroundTransparency = 1,
+            Text = "No targets",
+            TextColor3 = C.Sub,
+            Font = Enum.Font.GothamBold,
+            TextSize = 15,
+            Parent = empty,
+        })
+        new("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 16),
+            Position = UDim2.new(0, 0, 0, 68),
+            BackgroundTransparency = 1,
+            Text = "Check zones & rarities on the left",
+            TextColor3 = C.Mute,
+            Font = Enum.Font.Gotham,
+            TextSize = 11,
+            Parent = empty,
+        })
+        return
+    end
+
+    for i, egg in ipairs(targets) do
+        local rarityColor = RARITY_COLORS[egg.Rarity] or Color3.fromRGB(150, 150, 150)
+        local isCurrent = state.currentTarget and state.currentTarget.Key == egg.Key
+
+        local row = new("Frame", {
+            Size = UDim2.new(1, 0, 0, 62),
+            BackgroundColor3 = isCurrent and C.RowActive or C.Row,
+            BorderSizePixel = 0,
+            LayoutOrder = i,
+            Active = false,
+            Parent = targetScroll,
+        })
+        new("UICorner", { CornerRadius = UDim.new(0, 10), Parent = row })
+
+        local bar = new("Frame", {
+            Size = UDim2.new(0, 3, 1, -18),
+            Position = UDim2.new(0, 10, 0, 9),
+            BackgroundColor3 = rarityColor,
+            BorderSizePixel = 0,
+            Parent = row,
+        })
+        new("UICorner", { CornerRadius = UDim.new(0, 2), Parent = bar })
+
+        local indexBadge = new("Frame", {
+            Size = UDim2.new(0, 26, 0, 22),
+            Position = UDim2.new(0, 22, 0, 8),
+            BackgroundColor3 = C.Panel2,
+            BorderSizePixel = 0,
+            Parent = row,
+        })
+        new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = indexBadge })
+        new("TextLabel", {
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Text = "#" .. i,
+            TextColor3 = C.Mute,
+            Font = Enum.Font.GothamBold,
+            TextSize = 10,
+            Parent = indexBadge,
+        })
+
+        new("TextLabel", {
+            Size = UDim2.new(1, -180, 0, 20),
+            Position = UDim2.new(0, 58, 0, 10),
+            BackgroundTransparency = 1,
+            Text = egg.Species,
+            TextColor3 = C.Text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 15,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            Parent = row,
+        })
+
+        new("TextLabel", {
+            Size = UDim2.new(1, -180, 0, 16),
+            Position = UDim2.new(0, 58, 0, 32),
+            BackgroundTransparency = 1,
+            Text = egg.Biome .. "  ·  " .. egg.Rarity
+                .. (egg.Mutation ~= "-" and ("  ·  " .. egg.Mutation) or ""),
+            TextColor3 = rarityColor,
+            Font = Enum.Font.GothamMedium,
+            TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            Parent = row,
+        })
+
+        local distBadge = new("Frame", {
+            Size = UDim2.new(0, 74, 0, 22),
+            Position = UDim2.new(1, -88, 0, 8),
+            BackgroundColor3 = C.Panel2,
+            BorderSizePixel = 0,
+            Parent = row,
+        })
+        new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = distBadge })
+        new("TextLabel", {
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Text = string.format("%.0f", egg.BiomeDistance or 0) .. " studs",
+            TextColor3 = C.Dist,
+            Font = Enum.Font.GothamBold,
+            TextSize = 10,
+            Parent = distBadge,
+        })
+
+        if isCurrent then
+            local targetBadge = new("Frame", {
+                Size = UDim2.new(0, 74, 0, 22),
+                Position = UDim2.new(1, -88, 0, 34),
+                BackgroundColor3 = C.Accent,
+                BorderSizePixel = 0,
+                Parent = row,
+            })
+            new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = targetBadge })
+            new("TextLabel", {
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundTransparency = 1,
+                Text = "● TARGET",
+                TextColor3 = Color3.fromRGB(255, 255, 255),
+                Font = Enum.Font.GothamBold,
+                TextSize = 10,
+                Parent = targetBadge,
+            })
+        end
+    end
+end
+
+local function startAutoSteal()
+    if state.autoLoop then return end
+    state.autoLoop = task.spawn(function()
+        while state.autoSteal do
+            local targets = getSelectedTargets()
+
+            if #targets == 0 then
+                state.status = "No targets"
+                task.wait(1)
+            else
+                for i, target in ipairs(targets) do
+                    if not state.autoSteal then break end
+
+                    state.currentTarget = target
+                    state.status = string.format("→ %s (%d/%d)",
+                        target.Species, i, #targets)
+
+                    teleportTo(target.Position)
+                    task.wait(0.4)
+
+                    state.status = "Stealing " .. target.Species .. "..."
+                    local ok = attemptSteal(target, 8)
+
+                    state.status = ok
+                        and ("✓ " .. target.Species)
+                        or ("✗ " .. target.Species)
+
+                    teleportTo(SPAWN)
+                    task.wait(2)
+                end
+                state.currentTarget = nil
+            end
+        end
+    end)
+end
+
+local function stopAutoSteal()
+    state.autoSteal = false
+    state.autoLoop = nil
+    state.currentTarget = nil
+    state.status = "Ready"
+    autoBtn.Text = "AUTO  OFF"
+    autoBtn.BackgroundColor3 = C.AutoOff
+end
+
+autoBtn.MouseButton1Click:Connect(function()
+    if not state.autoSteal then
+        local targets = getSelectedTargets()
+        if #targets == 0 then
+            state.status = "No targets"
+            return
+        end
+        state.autoSteal = true
+        autoBtn.Text = "AUTO  ON"
+        autoBtn.BackgroundColor3 = C.AutoOn
+        startAutoSteal()
+    else
+        stopAutoSteal()
+    end
+end)
+
+minimizeBtn.MouseButton1Click:Connect(function()
+    state.minimized = not state.minimized
+    if state.minimized then
+        body.Visible = false
+        TweenService:Create(main, TweenInfo.new(0.15),
+            { Size = UDim2.new(0, 820, 0, 64) }):Play()
+        minimizeBtn.Text = "+"
+    else
+        TweenService:Create(main, TweenInfo.new(0.15),
+            { Size = UDim2.new(0, 820, 0, state.bodyHeight) }):Play()
+        task.wait(0.15)
+        body.Visible = true
+        minimizeBtn.Text = "—"
+    end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+    stopAutoSteal()
+    gui:Destroy()
+end)
+
+task.spawn(function()
+    state.biomes = discoverBiomes()
+
+    for _, biome in ipairs(state.biomes) do
+        state.selectedZones[biome.Name] = true
+    end
+    for _, r in ipairs(ALL_RARITIES) do
+        state.selectedRarities[r] = true
+    end
+
+    buildFilterPanel()
+    renderTargets()
+end)
+
+task.spawn(function()
+    while gui.Parent do
+        task.wait(2)
+        state.lastUpdate = tick()
+
+        local newBiomes = discoverBiomes()
+        local changed = #newBiomes ~= #state.biomes
+        if not changed then
+            for i, b in ipairs(newBiomes) do
+                if not state.biomes[i] or state.biomes[i].Name ~= b.Name then
+                    changed = true
+                    break
+                end
+            end
+        end
+        if changed then
+            state.biomes = newBiomes
+            buildFilterPanel()
+        else
+            state.biomes = newBiomes
+        end
+
+        renderTargets()
+
+        local targets = state.foundTargets
+        statTargets.Text = tostring(#targets)
+        statTargets.TextColor3 = #targets > 0 and C.Accent or C.Mute
+
+        local zonesSelected = 0
+        for _ in pairs(state.selectedZones) do zonesSelected = zonesSelected + 1 end
+        statZones.Text = tostring(zonesSelected)
+
+        local raritiesSelected = 0
+        for _ in pairs(state.selectedRarities) do raritiesSelected = raritiesSelected + 1 end
+        statRarities.Text = tostring(raritiesSelected)
+
+        statStatus.Text = state.status
+        if state.autoSteal then
+            statStatus.TextColor3 = C.Accent
+        elseif state.status:find("✗") then
+            statStatus.TextColor3 = C.Danger
+        elseif state.status:find("✓") then
+            statStatus.TextColor3 = C.AutoOn
+        else
+            statStatus.TextColor3 = C.Sub
+        end
+
+        lastUpdateLbl.Text = string.format("Updated %.0fs ago", tick() - state.lastUpdate)
+    end
+end)
