@@ -1,4 +1,4 @@
--- Ghost Walk v10.1
+-- Ghost Walk v10.2
 
 local Players                = game:GetService("Players")
 local RunService             = game:GetService("RunService")
@@ -474,61 +474,87 @@ function getItemPosition(object)
     return nil
 end
 
--- Instant Pickup
+-- Instant Pickup (optimized · event-driven · no per-frame scanning)
 InstantPickupConns = {}
 InstantPickupPrevHolds = {}
+InstantPickupSweepThread = nil
+InstantPickupTouched = setmetatable({}, { __mode = "k" })
+
+function applyPromptHold(obj)
+    if not obj or not obj:IsA("ProximityPrompt") then return end
+    if InstantPickupTouched[obj] then return end
+    InstantPickupTouched[obj] = true
+    InstantPickupPrevHolds[obj] = obj.HoldDuration
+    pcall(function() obj.HoldDuration = 0 end)
+end
 
 function enableInstantPickup()
     for _, c in ipairs(InstantPickupConns) do pcall(function() c:Disconnect() end) end
     InstantPickupConns = {}
-    InstantPickupPrevHolds = {}
-
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") then
-            InstantPickupPrevHolds[obj] = obj.HoldDuration
-            pcall(function() obj.HoldDuration = 0 end)
-        end
+    if InstantPickupSweepThread then
+        pcall(function() task.cancel(InstantPickupSweepThread) end)
+        InstantPickupSweepThread = nil
     end
+    InstantPickupPrevHolds = {}
+    InstantPickupTouched = setmetatable({}, { __mode = "k" })
 
+    -- Initial one-time sweep for existing prompts
+    task.spawn(function()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") then
+                applyPromptHold(obj)
+            end
+        end
+    end)
+
+    -- Event-driven: catch new prompts instantly
     table.insert(InstantPickupConns, Workspace.DescendantAdded:Connect(function(obj)
         if not Config.InstantPickup then return end
         if obj:IsA("ProximityPrompt") then
-            InstantPickupPrevHolds[obj] = obj.HoldDuration
-            pcall(function() obj.HoldDuration = 0 end)
+            applyPromptHold(obj)
         end
     end))
 
+    -- Fire the prompt the moment the player begins pressing it
     table.insert(InstantPickupConns, ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
         if not Config.InstantPickup then return end
         if not prompt or not prompt.Enabled then return end
-        pcall(function()
-            prompt.HoldDuration = 0
-            fireproximityprompt(prompt)
-        end)
+        if not InstantPickupTouched[prompt] then
+            applyPromptHold(prompt)
+        end
+        pcall(function() fireproximityprompt(prompt) end)
     end))
 
-    table.insert(InstantPickupConns, RunService.Heartbeat:Connect(function()
-        if not Config.InstantPickup then return end
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("ProximityPrompt") and obj.HoldDuration ~= 0 then
-                if InstantPickupPrevHolds[obj] == nil then
-                    InstantPickupPrevHolds[obj] = obj.HoldDuration
+    -- Fallback slow sweep every 2s (in case a game clones prompts without event)
+    InstantPickupSweepThread = task.spawn(function()
+        while Config.InstantPickup do
+            task.wait(2)
+            if not Config.InstantPickup then break end
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("ProximityPrompt") and not InstantPickupTouched[obj] then
+                    applyPromptHold(obj)
                 end
-                obj.HoldDuration = 0
             end
         end
-    end))
+    end)
 end
 
 function disableInstantPickup()
     for _, c in ipairs(InstantPickupConns) do pcall(function() c:Disconnect() end) end
     InstantPickupConns = {}
+
+    if InstantPickupSweepThread then
+        pcall(function() task.cancel(InstantPickupSweepThread) end)
+        InstantPickupSweepThread = nil
+    end
+
     for prompt, original in pairs(InstantPickupPrevHolds) do
         if prompt and prompt.Parent then
             pcall(function() prompt.HoldDuration = original end)
         end
     end
     InstantPickupPrevHolds = {}
+    InstantPickupTouched = setmetatable({}, { __mode = "k" })
 end
 
 -- Travel
@@ -969,7 +995,7 @@ do
         Size = UDim2.new(1, -120, 0, 14),
         Position = UDim2.new(0, 54, 0, 28),
         BackgroundTransparency = 1,
-        Text = "v10.1 · walk-jump",
+        Text = "v10.2 · optimized",
         TextColor3 = Theme.TextMute,
         Font = Theme.Font,
         TextSize = 10,
@@ -3097,4 +3123,4 @@ do
     end)
 end
 
-toastFn("Ghost Walk v10.1 · ready", Theme.Success)
+toastFn("Ghost Walk v10.2 · ready", Theme.Success)
