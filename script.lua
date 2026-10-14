@@ -26,9 +26,9 @@ local Config = {
     GodMode      = false,
     FlyActive    = false,
     FlyHeight    = 25,
-    TravelMode = "teleport",
-    ReturnDelay = 1.0,
-    FpsBoost = false,
+    TravelMode   = "teleport",
+    ReturnDelay  = 1.0,
+    FpsBoost     = false,
     FreeCam      = false,
     FreeCamSpeed = 60,
     AutoPickup   = false,
@@ -37,6 +37,7 @@ local Config = {
     PickupLimit  = 0,
     PickupCount  = 0,
     PickupWaitAfterLimit = 1.0,
+    InstantPickup = false,
 }
 
 local LiveFPS, LivePing = 0, 0
@@ -689,7 +690,7 @@ createInstance("TextLabel", {
     Size = UDim2.new(1, -120, 0, 14),
     Position = UDim2.new(0, 54, 0, 28),
     BackgroundTransparency = 1,
-    Text = "v9.4  ·  fps · travel · freecam · script",
+    Text = "v9.5  ·  fps · travel · freecam · instant · script",
     TextColor3 = Theme.TextMute,
     Font = Theme.Font,
     TextSize = 10,
@@ -1159,11 +1160,111 @@ createToggleRow(PageMain, {
     end,
 })
 
+-- ============================================================
+-- INSTANT PICKUP (Main menu)
+-- ============================================================
+local InstantPickupActive = false
+
+local function instantPickupLoop()
+    while InstantPickupActive do
+        if not Root or not Root.Parent then
+            task.wait(0.2)
+            continue
+        end
+
+        local origin = Root.Position
+        local range  = tonumber(Config.PickupRange) or 20
+
+        for _, object in ipairs(Workspace:GetDescendants()) do
+            if object:IsA("ProximityPrompt") and object.Enabled then
+                local pos = getItemPosition(object)
+                if pos and (pos - origin).Magnitude <= range then
+                    pcall(function()
+                        object.HoldDuration = 0
+                    end)
+                    firePrompt(object)
+                end
+            end
+        end
+
+        for _, object in ipairs(Workspace:GetChildren()) do
+            if object:IsA("Tool") then
+                local handle = object:FindFirstChild("Handle")
+                if handle and handle:IsA("BasePart")
+                and (handle.Position - origin).Magnitude <= range then
+                    tryTouchPickup(handle)
+                    pcall(function()
+                        if LocalPlayer.Character then
+                            object.Parent = LocalPlayer.Character
+                        end
+                    end)
+                end
+            elseif object:IsA("BasePart") or object:IsA("Model") then
+                local pos = getItemPosition(object)
+                if pos and (pos - origin).Magnitude <= range then
+                    local part = object:IsA("BasePart") and object
+                        or object:FindFirstChildWhichIsA("BasePart", true)
+                    if part then tryTouchPickup(part) end
+                end
+            end
+        end
+
+        task.wait(0.1)
+    end
+end
+
+local function startInstantPickup()
+    if InstantPickupActive then return end
+    InstantPickupActive = true
+    task.spawn(instantPickupLoop)
+
+    pcall(function()
+        for _, object in ipairs(Workspace:GetDescendants()) do
+            if object:IsA("ProximityPrompt") then
+                object.HoldDuration = 0
+            end
+        end
+    end)
+
+    if toastFn then
+        toastFn("Instant Pickup ON · range " .. tostring(Config.PickupRange), Theme.Success)
+    end
+end
+
+local function stopInstantPickup()
+    InstantPickupActive = false
+    if toastFn then toastFn("Instant Pickup OFF", Theme.TextDim) end
+end
+
 createSection(PageMain, "Movement", 5)
+
+createToggleRow(PageMain, {
+    name = "Instant Pickup",
+    desc = "Manual fast collect · no hold wait · range based",
+    order = 6,
+    callback = function(state)
+        Config.InstantPickup = state
+        if state then
+            startInstantPickup()
+        else
+            stopInstantPickup()
+        end
+    end,
+    input = {
+        value = tostring(Config.PickupRange),
+        callback = function(value)
+            Config.PickupRange = value
+            if InstantPickupActive and toastFn then
+                toastFn("Instant Pickup range: " .. tostring(value), Theme.Accent)
+            end
+        end,
+    },
+})
+
 createToggleRow(PageMain, {
     name = "Ghost Walk",
     desc = "Noclip · no fall · height lock",
-    order = 6,
+    order = 7,
     callback = function(state)
         Config.GhostActive = state
         if state then enableGhostWalk() else disableGhostWalk() end
@@ -1173,7 +1274,7 @@ createToggleRow(PageMain, {
 createToggleRow(PageMain, {
     name = "Speed Boost",
     desc = "Override walk speed",
-    order = 7,
+    order = 8,
     callback = function(state)
         Config.BoostActive = state
         if Humanoid then
@@ -1194,7 +1295,7 @@ createToggleRow(PageMain, {
 createToggleRow(PageMain, {
     name = "Invisibility",
     desc = "Hide character completely",
-    order = 8,
+    order = 9,
     callback = function(state)
         Config.InvisActive = state
         if state then enableInvisibility() else disableInvisibility() end
@@ -1204,7 +1305,7 @@ createToggleRow(PageMain, {
 createToggleRow(PageMain, {
     name = "God Mode",
     desc = "Infinite HP · block hazard teleport to spawn",
-    order = 9,
+    order = 10,
     callback = function(state)
         Config.GodMode = state
         if state then enableGodMode() else disableGodMode() end
@@ -1214,7 +1315,7 @@ createToggleRow(PageMain, {
 createToggleRow(PageMain, {
     name = "Fly",
     desc = "Walk-travel: rise by height (m), fly, then land",
-    order = 10,
+    order = 11,
     callback = function(state)
         Config.FlyActive = state
         if toastFn then
@@ -1226,7 +1327,6 @@ createToggleRow(PageMain, {
     end,
     input = {
         value = tostring(Config.FlyHeight or 25),
-        placeholder = "25",
         callback = function(value)
             Config.FlyHeight = value
             if Config.FlyActive and toastFn then
@@ -3934,4 +4034,4 @@ toastFn = function(message, color)
     end)
 end
 
-toastFn("Ghost Walk v9.4 · ready", Theme.Success)
+toastFn("Ghost Walk v9.5 · ready", Theme.Success)
